@@ -132,5 +132,27 @@
     "year": "2000",
     "genre": "Arcade Flight",
     "enabled": true
+  },
+  {
+    "id": "machinarium-legacy",
+    "name": "Machinarium",
+    "subtitle": "Legacy (32-bit)",
+    "wgbUrl": "/apps/machinarium-legacy.wgb",
+    "coverUrl": "/covers/machinarium-legacy-box.jpg",
+    "description": "Amanita Design's award-winning point-and-click adventure. A little robot is dumped in a scrap-metal city and must find his way back to his robot girlfriend.",
+    "year": "2009",
+    "genre": "Adventure",
+    "enabled": true
+  },
+  {
+    "id": "machinarium-ce",
+    "name": "Machinarium",
+    "subtitle": "Collector's Edition (64-bit)",
+    "wgbUrl": "/apps/machinarium-ce.wgb",
+    "coverUrl": "/covers/machinarium-ce-box.jpg",
+    "description": "Collector's Edition build. Note: the CE executable is 64-bit and requires a future 64-bit-capable emulator.",
+    "year": "2011",
+    "genre": "Adventure",
+    "enabled": false
   }
 ]
