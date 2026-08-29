@@ -11,14 +11,19 @@
 //
 // PERFORMANCE: GitHub's CDN is far from most users, and a click-driven game
 // reads blocks on demand — each miss would cost a ~1s round-trip to origin.
-// We therefore cache every Range response in the Cloudflare edge cache
-// (Cache API) keyed by [asset, range]. The first visitor pulls a block from
-// origin once; every subsequent visitor (and the same visitor re-reading a
-// warm block) hits the CDN edge in tens of milliseconds. Falls outside
-// cacheable ranges (e.g. non-Range or multi-range) pass straight through.
+// Range responses are therefore cached at the Cloudflare edge (Cache API, keyed
+// by [asset, range]) so repeat visitors — and re-reads inside a game launch —
+// hit the CDN edge instead of origin. If any cache operation throws, we fall
+// back to a plain pass-through proxy so a cache hiccup never breaks loading.
 
 const UPSTREAM_BASE =
   "https://github.com/kmm-plf/bottleship-machinarium/releases/download/machinarium";
+
+function cacheKeyFor(key: string, rangeHeader: string): Request {
+  return new Request(`https://wgb-edge.cache/${key}/${encodeURIComponent(rangeHeader)}`, {
+    method: "GET",
+  });
+}
 
 export const onRequest: PagesFunction = async ({ params, request }) => {
   if (request.method !== "GET" && request.method !== "HEAD") {
@@ -39,12 +44,12 @@ export const onRequest: PagesFunction = async ({ params, request }) => {
     request.method === "GET" && !!rangeHeader && /^bytes=\d+-\d+$/.test(rangeHeader);
 
   if (isCacheableSingleRange) {
-    const cacheKey = new Request(
-      `https://wgb-edge.cache/${key}/${encodeURIComponent(rangeHeader!)}`,
-      { method: "GET" },
-    );
-    const cached = await caches.default.match(cacheKey);
-    if (cached) return cached;
+    try {
+      const cached = await caches.default.match(cacheKeyFor(key, rangeHeader!));
+      if (cached) return cached;
+    } catch {
+      // Cache unreadable — fall through to origin.
+    }
   }
 
   const upstreamInit: RequestInit = {
@@ -66,7 +71,6 @@ export const onRequest: PagesFunction = async ({ params, request }) => {
   const headers = new Headers();
   headers.set("Accept-Ranges", "bytes");
   headers.set("Cross-Origin-Resource-Policy", "same-origin");
-  // Tell the edge cache how long to keep Range responses valid.
   headers.set("Cache-Control", "public, max-age=3600, s-maxage=3600");
   for (const h of ["Content-Type", "Content-Range", "Content-Length", "ETag", "Last-Modified"]) {
     const v = upstreamRes.headers.get(h);
@@ -75,13 +79,12 @@ export const onRequest: PagesFunction = async ({ params, request }) => {
 
   const body = new Response(upstreamRes.body, { status: upstreamRes.status, headers });
 
-  // Cache the clone; return the original to the client.
   if (isCacheableSingleRange) {
-    const cacheKey = new Request(
-      `https://wgb-edge.cache/${key}/${encodeURIComponent(rangeHeader!)}`,
-      { method: "GET" },
-    );
-    await caches.default.put(cacheKey, body.clone());
+    try {
+      await caches.default.put(cacheKeyFor(key, rangeHeader!), body.clone());
+    } catch {
+      // Best-effort — a failed cache write never blocks delivery.
+    }
   }
 
   return body;
