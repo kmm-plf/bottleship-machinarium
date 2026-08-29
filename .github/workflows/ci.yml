@@ -64,21 +64,28 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # Pull the WGB bundles from the GitHub Release into public/apps/ so they
-      # ship as STATIC assets. Cloudflare's CDN then natively caches them and
-      # serves HTTP Range (206) reads from the edge — no Pages Function, no
-      # per-block round-trip back to GitHub origin. Keeps first-load fast for
-      # every visitor.
-      - name: Fetch game bundles
+      # Pull the WGB bundles from the GitHub Release into dist/apps/ directly.
+      # Vite's config deliberately skips copying public/apps/ into dist
+      # (copyPublicDirExceptApps), so we place the bundles into dist/apps/ AFTER
+      # the build. They ship as STATIC assets: Cloudflare's CDN natively caches
+      # them and serves HTTP Range (206) reads from the edge — no Pages
+      # Function, no per-block round-trip back to GitHub origin.
+      - name: Fetch game bundles and stage into dist/apps
         run: |
-          mkdir -p public/apps
-          curl -fL -o public/apps/machinarium-legacy.wgb \
+          curl -fL -o public/machinarium-legacy.wgb \
             "https://github.com/kmm-plf/bottleship-machinarium/releases/download/machinarium/machinarium-legacy.wgb"
-          curl -fL -o public/apps/machinarium-ce.wgb \
+          curl -fL -o public/machinarium-ce.wgb \
             "https://github.com/kmm-plf/bottleship-machinarium/releases/download/machinarium/machinarium-ce.wgb"
 
-      - name: Build (bundles are copied into dist via public/)
+      - name: Build
         run: bun run build
+
+      - name: Stage WGB bundles into dist/apps
+        run: |
+          mkdir -p dist/apps
+          mv public/machinarium-legacy.wgb dist/apps/machinarium-legacy.wgb
+          mv public/machinarium-ce.wgb dist/apps/machinarium-ce.wgb
+          ls -la dist/apps
 
       - name: Deploy to Cloudflare Pages (machinarium-game)
         run: bunx wrangler pages deploy dist --project-name machinarium-game --branch main
