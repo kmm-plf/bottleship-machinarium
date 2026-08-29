@@ -64,7 +64,20 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Build
+      # Pull the WGB bundles from the GitHub Release into public/apps/ so they
+      # ship as STATIC assets. Cloudflare's CDN then natively caches them and
+      # serves HTTP Range (206) reads from the edge — no Pages Function, no
+      # per-block round-trip back to GitHub origin. Keeps first-load fast for
+      # every visitor.
+      - name: Fetch game bundles
+        run: |
+          mkdir -p public/apps
+          curl -fL -o public/apps/machinarium-legacy.wgb \
+            "https://github.com/kmm-plf/bottleship-machinarium/releases/download/machinarium/machinarium-legacy.wgb"
+          curl -fL -o public/apps/machinarium-ce.wgb \
+            "https://github.com/kmm-plf/bottleship-machinarium/releases/download/machinarium/machinarium-ce.wgb"
+
+      - name: Build (bundles are copied into dist via public/)
         run: bun run build
 
       - name: Deploy to Cloudflare Pages (machinarium-game)
