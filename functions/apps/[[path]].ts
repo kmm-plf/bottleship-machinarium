@@ -1,4 +1,4 @@
-// Cloudflare Pages Function — serve WGB game bundles from GitHub Releases, SAME-ORIGIN.
+// Cloudflare Pages Function — serve WGB game bundles from GitHub Releases, SAME-ORIGIN, EDGE-CACHED.
 //
 // The site is cross-origin isolated (COOP/COEP `require-corp`, needed for
 // SharedArrayBuffer), so serving bundles from THIS origin (`/apps/*`) sidesteps
@@ -8,8 +8,14 @@
 //
 // Upstream is a GitHub Release (assets live on objects.githubusercontent.com,
 // which honors `bytes=start-end` Range requests with 206). R2 is NOT used.
-// Asset keys are the bundle filenames from the catalog's wgbUrl, e.g.
-// `/apps/machinarium-legacy.wgb` → `.../releases/download/machinarium/machinarium-legacy.wgb`.
+//
+// PERFORMANCE: GitHub's CDN is far from most users, and a click-driven game
+// reads blocks on demand — each miss would cost a ~1s round-trip to origin.
+// We therefore cache every Range response in the Cloudflare edge cache
+// (Cache API) keyed by [asset, range]. The first visitor pulls a block from
+// origin once; every subsequent visitor (and the same visitor re-reading a
+// warm block) hits the CDN edge in tens of milliseconds. Falls outside
+// cacheable ranges (e.g. non-Range or multi-range) pass straight through.
 
 const UPSTREAM_BASE =
   "https://github.com/kmm-plf/bottleship-machinarium/releases/download/machinarium";
@@ -24,15 +30,23 @@ export const onRequest: PagesFunction = async ({ params, request }) => {
   if (!key) return new Response("Not found", { status: 404 });
 
   const upstream = `${UPSTREAM_BASE}/${key}`;
-
-  const headers = new Headers();
-  headers.set("Accept-Ranges", "bytes");
-  headers.set("Cross-Origin-Resource-Policy", "same-origin");
-  headers.set("Cache-Control", "public, max-age=3600");
-
-  // Forward a single-range request to the upstream CDN (redirect followed by
-  // the runtime). No Range header = whole object.
   const rangeHeader = request.headers.get("Range");
+
+  // Single byte-range requests (the only kind the WGB client issues) are
+  // edge-cacheable. Anything else (no Range, invalid, multi-range) passes
+  // through uncached.
+  const isCacheableSingleRange =
+    request.method === "GET" && !!rangeHeader && /^bytes=\d+-\d+$/.test(rangeHeader);
+
+  if (isCacheableSingleRange) {
+    const cacheKey = new Request(
+      `https://wgb-edge.cache/${key}/${encodeURIComponent(rangeHeader!)}`,
+      { method: "GET" },
+    );
+    const cached = await caches.default.match(cacheKey);
+    if (cached) return cached;
+  }
+
   const upstreamInit: RequestInit = {
     method: request.method,
     headers: rangeHeader ? { Range: rangeHeader } : {},
@@ -45,17 +59,30 @@ export const onRequest: PagesFunction = async ({ params, request }) => {
     return new Response("Upstream error", { status: 502 });
   }
 
-  // Accept 200 (whole body) and 206 (partial); anything else → not found.
   if (upstreamRes.status !== 200 && upstreamRes.status !== 206) {
     return new Response("Not found", { status: 404 });
   }
 
-  // Relay the range-relevant headers from the upstream CDN so the guest's
-  // range source can compute offsets and sizes correctly.
+  const headers = new Headers();
+  headers.set("Accept-Ranges", "bytes");
+  headers.set("Cross-Origin-Resource-Policy", "same-origin");
+  // Tell the edge cache how long to keep Range responses valid.
+  headers.set("Cache-Control", "public, max-age=3600, s-maxage=3600");
   for (const h of ["Content-Type", "Content-Range", "Content-Length", "ETag", "Last-Modified"]) {
     const v = upstreamRes.headers.get(h);
     if (v) headers.set(h, v);
   }
 
-  return new Response(upstreamRes.body, { status: upstreamRes.status, headers });
+  const body = new Response(upstreamRes.body, { status: upstreamRes.status, headers });
+
+  // Cache the clone; return the original to the client.
+  if (isCacheableSingleRange) {
+    const cacheKey = new Request(
+      `https://wgb-edge.cache/${key}/${encodeURIComponent(rangeHeader!)}`,
+      { method: "GET" },
+    );
+    await caches.default.put(cacheKey, body.clone());
+  }
+
+  return body;
 };
